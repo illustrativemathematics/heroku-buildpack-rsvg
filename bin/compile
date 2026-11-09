@@ -2,7 +2,7 @@
 # bin/compile <BUILD_DIR> <CACHE_DIR> <ENV_DIR>
 
 # Abort on errors!
-set -e
+set -eo pipefail
 
 # Output helpers
 BIN_DIR=$(cd $(dirname $0); pwd) # absolute path
@@ -13,37 +13,32 @@ BUILD_DIR=$1
 CACHE_DIR=$2
 ENV_DIR=$3
 
-echo $BUILD_DIR
-echo $CACHE_DIR
-echo $ENV_DIR
+RSVG_DIR="$BIN_DIR/../rsvg"
+STACK_BINARY="$RSVG_DIR/$STACK/rsvg-convert"
 
-# add the rsvg to the future PATH + update actual PATH
-#echo "$BUILD_DIR/rsvg" >> $ENV_DIR/PATH
-#echo "$BUILD_DIR/rsvg" >> $ENV_DIR/BIN_PATH
-#echo "$BUILD_DIR/rsvg" >> $ENV_DIR/LD_LIBRARY_PATH
-
-export PATH="$BUILD_DIR/bin":$PATH
-echo $PATH
-
-# copy the buildpack to the right place
-mkdir -p $BUILD_DIR/bin
-cp $BIN_DIR/../rsvg/* $BUILD_DIR/bin
-ls $BUILD_DIR/bin/
-
-which rsvg-convert
-
-# Check for an essential binary to make sure it's installed
-if [ ! `which rsvg-convert` ]; then
-    build-warn "rsvg-convert installation failed"
+# Pick the rsvg-convert binary built for this stack
+build-step "Installing rsvg-convert for stack: ${STACK:-unknown}"
+if [ -z "$STACK" ] || [ ! -f "$STACK_BINARY" ]; then
+    build-warn "No rsvg-convert binary for stack '${STACK:-unset}'."
+    build-warn "Supported stacks: $(ls -d $RSVG_DIR/*/ | xargs -n1 basename | tr '\n' ' ')"
     exit 1
 fi
 
-set +e  # disable error checking
+mkdir -p $BUILD_DIR/bin
+cp "$STACK_BINARY" $BUILD_DIR/bin/rsvg-convert
+chmod +x $BUILD_DIR/bin/rsvg-convert
 
-# run testing build
-build-step "Now - running the testing build\n\n\n"
-
-rsvg-convert --version
+# Make sure the binary actually runs on this stack (missing shared libraries
+# would otherwise only show up at runtime)
+build-step "Testing rsvg-convert"
+TEST_OUTPUT=$(mktemp -d)/test.png
+if ! $BUILD_DIR/bin/rsvg-convert --version \
+    || ! $BUILD_DIR/bin/rsvg-convert -f png -o "$TEST_OUTPUT" "$RSVG_DIR/test.svg" \
+    || [ ! -s "$TEST_OUTPUT" ]; then
+    build-warn "rsvg-convert failed to run on $STACK"
+    ldd $BUILD_DIR/bin/rsvg-convert | grep 'not found' || true
+    exit 1
+fi
+build-info "Converted test.svg to PNG successfully"
 
 exit 0
-
